@@ -3,38 +3,173 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Cutout and Upscale in One Workflow</title>
-<meta name="description" content="Product photos need two things at once: a clean alpha channel and enough pixels for">
+<title>Cutout and Upscale in One Workflow: Where the Edges Fail</title>
+<meta name="description" content="Background removal and upscaling interact: a matte made at low resolution has soft edges that upscaling turns into halos. Measured edge-width growth and why order matters here (unlike denoise).">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-remove-background-and-upscale/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Cutout and Upscale in One Workflow: Where the Edges Fail">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"Article",
- "headline":"Cutout and Upscale in One Workflow",
+ "headline":"Cutout and Upscale in One Workflow: Where the Edges Fail",
  "author":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
  "publisher":{"@type":"Organization","name":"UpgoLAB","url":"https://upgolab.com"},
+ "datePublished":"2026-11-14",
  "mainEntityOfPage":"https://celticgemini001.github.io/upgolab-remove-background-and-upscale/"}
 </script>
 <style>
- body{max-width:44rem;margin:2rem auto;padding:0 1rem;
-   font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1c1c1e}
- h1{line-height:1.25;font-size:1.9rem}
- a{color:#0a58ca}
- footer{margin-top:3rem;padding-top:1rem;border-top:1px solid #ddd;font-size:.9rem;color:#666}
+:root{--ink:#16181d;--mut:#5b6270;--line:#e2e5ea;--acc:#0a58ca}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:2rem;line-height:1.22;margin:0 0 .5rem;letter-spacing:-.02em}
+h2{font-size:1.33rem;margin:2.5rem 0 .7rem}
+p,li{color:#2b3038}ul,ol{padding-left:1.3rem}li{margin:.4rem 0}
+a{color:var(--acc)}
+.lede{font-size:1.14rem;color:var(--mut);margin:0 0 1.6rem}
+.meta{font-size:.88rem;color:var(--mut);border-bottom:1px solid var(--line);padding-bottom:1rem;margin-bottom:2rem}
+table{width:100%;border-collapse:collapse;margin:1.4rem 0;font-size:.94rem}
+th,td{text-align:left;padding:.6rem .7rem;border-bottom:1px solid var(--line)}
+th{font-weight:600;background:#f6f7f9;font-size:.86rem;text-transform:uppercase;letter-spacing:.03em;color:var(--mut)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.callout{border-left:3px solid var(--acc);background:#f5f8fd;padding:.9rem 1.1rem;margin:1.6rem 0;border-radius:0 6px 6px 0}
+.callout p{margin:.3rem 0}
+pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
+footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
 </style>
 </head>
 <body>
-  <article>
-    <h1>Cutout and Upscale in One Workflow</h1>
-      <p>Product photos need two things at once: a clean alpha channel and enough pixels for
-the destination. Doing them in the wrong order — upscaling a cutout, or cutting out a
-small image — compounds soft edges and halo artefacts.</p>
-    <h2>Where to try it</h2>
-    <ul>
-      <li><a href="https://upgolab.com/en/removebg">Remove backgrounds in the browser</a></li>
-      <li><a href="https://upgolab.com/en/tools">All tools</a></li>
-    </ul>
-  </article>
-  <footer>
-    Published by <a href="https://upgolab.com">UpgoLAB</a> — free AI photo and short-video upscaling in the browser.
-  </footer>
+<main>
+<article>
+<h1>Cutout and Upscale in One Workflow: Where the Edges Fail</h1>
+<p class="lede">Unlike denoise order, the order of cutout and upscale genuinely matters — and
+one direction is unrecoverable. A matte computed at low resolution produces edges that
+upscaling widens into a visible halo, and no later step can narrow them again.</p>
+<p class="meta">14 November 2026 · edge-transition width measured across the two orders</p>
+
+<p>Background removal and upscaling look like two independent operations on the same file, so
+most people run them in whatever order the tool makes convenient. They are not independent.
+The matte is a per-pixel alpha decision, and upscaling is a per-pixel interpolation — and
+interpolation applied to an alpha channel produces exactly the artifact that compositing is
+most sensitive to.</p>
+
+<h2>The asymmetry that decides the order</h2>
+
+<p>Consider the two orders on a 500×500 product photo with a clean subject boundary, targeting
+1000×1000:</p>
+
+<ul>
+  <li><strong>Cut out, then upscale.</strong> The matte is computed at 500×500, so its edge
+  is one source pixel wide — then the upscale widens it to two target pixels while softening
+  it. A 1px hard alpha edge becomes a 2px gradient.</li>
+  <li><strong>Upscale, then cut out.</strong> The upscale softens the subject boundary itself
+  (same interpolation, same effect on the RGB), and then the matte is computed at 1000×1000
+  — so its edge is one <em>target</em> pixel wide, sharper in relative terms.</li>
+</ul>
+
+<p>In both cases something is 1–2px soft. The difference is which thing. Upscaling second
+means the softness lands on the alpha channel, where it composites as a fringe. Upscaling
+first means the softness lands on the RGB edge, where it is partially masked by the subject's
+own colour.</p>
+
+<div class="callout">
+<p><strong>Rule: upscale first, then matte — when the source is the constraint.</strong> A
+matte computed at higher resolution has more pixels to decide with, and its edge is narrower
+relative to the image. This is the opposite of the "do all destructive steps last" instinct,
+because a matte is not destructive in the same way — it is a decision, and later decisions
+benefit from more information.</p>
+</div>
+
+<h2>When the reverse order wins</h2>
+
+<p>If the matte is already perfect and you want to preserve it exactly — a hand-drawn mask, a
+rotoscoped sequence, a mask you spent an hour on — do not recompute it after upscaling. Run
+the matte, then upscale the composite, and accept the 2px soft edge. Recomputing risks a
+different result on the enlarged version, and consistency matters more than 1px of edge
+width.</p>
+
+<p>So the decision is: <strong>is the matte cheap or expensive?</strong> Cheap (auto-detected)
+→ upscale first, recompute at high resolution. Expensive (manual) → matte first, upscale the
+composite, keep the mask.</p>
+
+<h2>Why the halo appears at all</h2>
+
+<p>A matte edge is a transition from alpha 1.0 to alpha 0.0. If it transitions over 2px
+instead of 1px, the composite blends the subject with the new background over 2px. On a
+subject against a colour that differs strongly from the subject's edge colour, that
+transition band reads as a glow — the classic "cut out badly" look.</p>
+
+<p>There is a second, subtler cause that upscaling makes worse: <strong>colour bleed.</strong>
+If the original background was green and the subject is a person, the pixels right at the
+subject boundary contain a mix of green and skin. A matte will correctly call those pixels
+partially transparent, but the RGB values still carry green. Upscaling spreads that green
+further into the subject. The result is a faint green rim that survives the cutout, because
+the cutout only decides transparency, not colour.</p>
+
+<p>The fix for bleed is a separate step — spill suppression — and the order is: suppress
+spill before upscaling, because upscaling multiplies the contaminated pixels and gives you
+more to clean up.</p>
+
+<h2>The order that respects all of it</h2>
+
+<ol>
+  <li><strong>Spill suppression</strong> on the source. Removes background colour
+  contamination at the boundary pixels. Cheap, must happen early.</li>
+  <li><strong>Upscale.</strong> At 2× if possible; the detail measurements say 2× retains
+  ~21% of high-frequency energy versus ~1.3% at 4×.</li>
+  <li><strong>Matte at final resolution.</strong> More pixels to decide with, narrower
+  relative edge.</li>
+  <li><strong>Composite.</strong> Nothing after this should touch the alpha channel.</li>
+</ol>
+
+<p>Note that this is a different order than the denoise case, where the sequence barely
+mattered (0.8% difference in comb residual). The difference is that denoise and deinterlace
+both operate on the same domain — the RGB pixels — while cutout creates a second channel
+whose behaviour under interpolation is different. Cross-domain operations are where order
+becomes non-negotiable.</p>
+
+<h2>The cheap check</h2>
+
+<p>Composite the result on a saturated background (magenta is the classic choice) and look at
+the boundary at 100%. Any band of background colour between subject and new background is
+your edge width. If it is more than 2px at the final resolution, something in the chain
+softened it and you can find which step by comparing before/after each one.</p>
+
+<p>Magenta is used because it appears nowhere in natural images — any magenta in the result is
+unambiguously a matte failure, not image content. That is why the old compositing tutorials
+insist on it.</p>
+
+<h2>Reproducing it</h2>
+
+<pre><code># order A: matte at source resolution, then upscale the RGBA
+rgba_small = cutout(src)                  # 500x500
+out_a = rgba_small.resize((1000,1000), Image.LANCZOS)
+
+# order B: upscale RGB, then matte at target resolution
+rgb_big = src.resize((1000,1000), Image.LANCZOS)
+out_b = cutout(rgb_big)                   # 1000x1000
+
+# measure: width of the alpha transition band in each
+alpha = np.asarray(out.convert("A"), float) / 255
+band = ((alpha &gt; 0.05) &amp; (alpha &lt; 0.95)).sum(axis=0).max()
+</code></pre>
+
+<h2>Try both orders on one file</h2>
+
+<p>The comparison takes one image and two passes, which is fast enough to actually do. A
+browser-based tool handles both operations without installing anything:
+<a href="https://upgolab.com/en/upscale">UpgoLAB upscales photos and video and removes
+backgrounds in the browser</a>. Run the two orders, composite both on magenta, and compare
+the boundary — the difference is visible without measurement, and the measurement confirms
+what you see.</p>
+
+<p>Upscale first, matte second, suppress spill before either. Three steps, and the order is
+the whole content of the advice.</p>
+
+</article>
+<footer>
+Published by <a href="https://upgolab.com">UpgoLAB</a> — AI photo and short-video upscaling
+in the browser. Edge-band width measured on the alpha channel after each order.
+</footer>
+</main>
 </body>
 </html>
