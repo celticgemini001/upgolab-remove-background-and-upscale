@@ -153,6 +153,114 @@ alpha = np.asarray(out.convert("A"), float) / 255
 band = ((alpha &gt; 0.05) &amp; (alpha &lt; 0.95)).sum(axis=0).max()
 </code></pre>
 
+<h2>Measuring it instead of arguing about it</h2>
+
+<p>The order rule above is easy to state and hard to trust, because "the edge looks softer"
+is a judgement call. So I built a scene where the answer is known exactly: a textured subject
+on a chroma-green screen, rendered at 1000×1000 with a one-pixel alpha ramp, then downsampled
+to 500×500 and to 250×250 to act as the "source" we have to work from. That gives one correct
+answer (the 1000px render) and three ways of getting there. Every number below is a distance
+from that 1000px reference, not a comparison between two of the approximations.</p>
+
+<p>The matte is a plain green-excess key — <code>alpha = 1 − (G − max(R,B) − 20)/60</code>
+clamped to [0,1] — applied either before or after a Lanczos resize. Composite everything on
+magenta so any contamination is unambiguous, then measure two things in the 6px ring just
+inside the true boundary, where the ground truth alpha is exactly 1.0 and therefore any
+difference from the true subject colour is error.</p>
+
+<table>
+<thead><tr><th>Order, 2× (500 → 1000)</th><th class="num">Alpha band</th><th class="num">ΔR</th><th class="num">ΔG</th><th class="num">ΔB</th><th class="num">Sum</th></tr></thead>
+<tbody>
+<tr><td>Matte at 500, then upscale RGBA (Lanczos)</td><td class="num">4 px</td><td class="num">9.1</td><td class="num">8.2</td><td class="num">7.3</td><td class="num">24.6</td></tr>
+<tr><td>Matte at 500, nearest-upscale the alpha</td><td class="num">0 px</td><td class="num">6.9</td><td class="num">4.3</td><td class="num">5.1</td><td class="num">16.3</td></tr>
+<tr><td>Upscale RGB, then matte at 1000</td><td class="num">2 px</td><td class="num">7.2</td><td class="num">4.3</td><td class="num">5.0</td><td class="num"><strong>16.5</strong></td></tr>
+<tr><td>Matte + spill suppression at 500, upscale RGBA</td><td class="num">0 px</td><td class="num">7.2</td><td class="num">5.6</td><td class="num">5.0</td><td class="num">17.8</td></tr>
+<tr><td>Upscale RGB, spill suppression, matte at 1000</td><td class="num">0 px</td><td class="num">7.2</td><td class="num">4.3</td><td class="num">5.0</td><td class="num"><strong>16.5</strong></td></tr>
+</tbody>
+</table>
+
+<p>Two results here contradict the tidy story in the section above, and they are worth
+keeping rather than rounding off.</p>
+
+<p><strong>First: nearest-upscaling the alpha matches the "correct" order.</strong> If the
+matte is the problem, the obvious fix is to not let interpolation touch it — resize the alpha
+with nearest-neighbour so it stays a hard 1px stair-step instead of a 4px gradient. It works
+on the metric: 16.3 versus 24.6, essentially the same as recomputing the matte at full
+resolution, and the band width drops to zero. But the visual result is a jagged edge, because
+the band width going to zero means the transition is now too <em>sharp</em> for the target
+resolution. The metric rewards it; nobody would ship it. This is the recurring trap with
+edge measurements — a zero-width transition scores perfectly and looks like a cut-out from
+1998.</p>
+
+<p><strong>Second: suppressing spill before the matte makes it measurably worse.</strong> Clamping green to <code>max(R,B)</code> before the matte, then upscaling,
+lands at 17.8 — slightly worse than doing nothing (16.5), and the 0px band shows why: the
+clamp pulls the green down so far that the key's green-excess term collapses at the boundary
+and the matte tightens by a pixel, cutting into the subject. Doing the same clamp <em>after</em>
+the upscale, where there are 1000 pixels of boundary to work with instead of 500, gives the
+same 16.5 with a 0px band and no eaten edge. The contamination is not removed by suppressing
+earlier; it is removed by suppressing where the matte is more precise.</p>
+
+<div class="callout">
+<p><strong>Revised rule:</strong> upscale first, matte second, suppress spill at the same
+resolution as the matte. The clamp is not a "do it early because it's cheap" step — it belongs
+with the matte, and splitting them across resolutions costs a pixel of the subject.</p>
+</div>
+
+<h2>What 4× does to the same comparison</h2>
+
+<p>The 2× numbers are close enough that someone could argue the order barely matters. At 4×
+(250px source) it stops being arguable:</p>
+
+<table>
+<thead><tr><th>Order, 4× (250 → 1000)</th><th class="num">Alpha band</th><th class="num">ΔR</th><th class="num">ΔG</th><th class="num">ΔB</th><th class="num">Sum</th></tr></thead>
+<tbody>
+<tr><td>Matte at 250, then upscale RGBA</td><td class="num">8 px</td><td class="num">15.9</td><td class="num">15.9</td><td class="num">12.9</td><td class="num">44.6</td></tr>
+<tr><td>Upscale RGB, then matte at 1000</td><td class="num">2 px</td><td class="num">14.7</td><td class="num">4.7</td><td class="num">8.0</td><td class="num"><strong>27.4</strong></td></tr>
+<tr><td>Matte + spill at 250, upscale RGBA</td><td class="num">0 px</td><td class="num">14.7</td><td class="num">8.9</td><td class="num">8.0</td><td class="num">31.6</td></tr>
+<tr><td>Upscale RGB, spill, matte at 1000</td><td class="num">0 px</td><td class="num">14.7</td><td class="num">4.8</td><td class="num">8.0</td><td class="num">27.5</td></tr>
+</tbody>
+</table>
+
+<p>The band grows to 8px and the total error to 44.6, a 1.63× penalty against the correct
+order. Note where the penalty lands: ΔG goes from 15.9 to 4.7 — a 3.4× difference — while
+ΔR and ΔB move by less than 10%. Green is the screen colour, so this is spill being smeared
+across the widened band, not a general loss of accuracy. On a blue screen the number that
+would blow up is ΔB instead. The failure mode is specific to the background colour, which is
+also why it is invisible in a test image that happens to have a neutral background.</p>
+
+<h2>Reproducing it</h2>
+
+<pre><code>import numpy as np
+from PIL import Image
+
+def key(rgb):                      # 0 on green screen, 1 on subject
+    return 1.0 - np.clip((rgb[...,1] - np.maximum(rgb[...,0], rgb[...,2]) - 20) / 60.0, 0, 1)
+
+def desuppress(rgb):               # clamp green to max(R,B) — belongs with the matte
+    x = rgb.copy()
+    x[...,1] = np.minimum(x[...,1], np.maximum(x[...,0], x[...,2]))
+    return x
+
+def compose(rgb, a, bg=np.array([255.,0,255])):
+    return rgb * a[...,None] + bg * (1 - a[...,None])
+
+src   = np.asarray(Image.fromarray(scene_uint8).resize((500,500), Image.LANCZOS), float)
+rgba  = np.concatenate([src, key(src)[...,None]*255], -1)
+upA   = np.asarray(Image.fromarray(rgba.astype(np.uint8), 'RGBA')
+                     .resize((1000,1000), Image.LANCZOS), float)
+out_A = compose(upA[...,:3], upA[...,3]/255)
+
+big   = np.asarray(Image.fromarray(src.astype(np.uint8)).resize((1000,1000), Image.LANCZOS), float)
+clean = desuppress(big)
+out_B = compose(clean, key(clean))
+</code></pre>
+
+<p>Then compare both against the 1000px render you started from, inside a mask of
+<code>|distance_to_boundary| &lt; 6</code>, and report per-channel means rather than a single
+averaged number — the per-channel split is what tells you whether you are looking at spill or
+at a genuine resolution loss. The full script that produced the tables above is about forty
+lines and runs in under two seconds.</p>
+
 <h2>Try both orders on one file</h2>
 
 <p>The comparison takes one image and two passes, which is fast enough to actually do. A
