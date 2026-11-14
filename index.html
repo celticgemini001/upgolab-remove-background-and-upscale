@@ -59,17 +59,17 @@ most sensitive to.</p>
 
 <ul>
   <li><strong>Cut out, then upscale.</strong> The matte is computed at 500×500, so its edge
-  is one source pixel wide — then the upscale widens it to two target pixels while softening
-  it. A 1px hard alpha edge becomes a 2px gradient.</li>
+  is one source pixel wide — then the upscale widens it while softening it. Measured below:
+  a 1px source ramp becomes a 4px transition at 2× and 8px at 4×.</li>
   <li><strong>Upscale, then cut out.</strong> The upscale softens the subject boundary itself
   (same interpolation, same effect on the RGB), and then the matte is computed at 1000×1000
   — so its edge is one <em>target</em> pixel wide, sharper in relative terms.</li>
 </ul>
 
-<p>In both cases something is 1–2px soft. The difference is which thing. Upscaling second
-means the softness lands on the alpha channel, where it composites as a fringe. Upscaling
-first means the softness lands on the RGB edge, where it is partially masked by the subject's
-own colour.</p>
+<p>In both cases something is soft — measured, 4px versus 2px at 2×, and 8px versus 2px at 4×
+(see the tables below). The difference is which thing. Upscaling second means the softness
+lands on the alpha channel, where it composites as a fringe. Upscaling first means the
+softness lands on the RGB edge, where it is partially masked by the subject's own colour.</p>
 
 <div class="callout">
 <p><strong>Rule: upscale first, then matte — when the source is the constraint.</strong> A
@@ -105,21 +105,30 @@ partially transparent, but the RGB values still carry green. Upscaling spreads t
 further into the subject. The result is a faint green rim that survives the cutout, because
 the cutout only decides transparency, not colour.</p>
 
-<p>The fix for bleed is a separate step — spill suppression — and the order is: suppress
-spill before upscaling, because upscaling multiplies the contaminated pixels and gives you
-more to clean up.</p>
+<p>The fix for bleed is a separate step — spill suppression — and it has to happen at the
+resolution where the matte is computed, not earlier. Suppressing on the small source and then
+scaling the alpha up measurably underperforms: 17.8 versus 16.5 at 2×, and 31.6 versus 27.5
+at 4×. The clamp pulls green down hard enough that the key's green-excess term collapses at
+the boundary and the matte tightens into the subject. Measured, not assumed — the numbers are
+in the tables below.</p>
 
 <h2>The order that respects all of it</h2>
 
 <ol>
-  <li><strong>Spill suppression</strong> on the source. Removes background colour
-  contamination at the boundary pixels. Cheap, must happen early.</li>
   <li><strong>Upscale.</strong> At 2× if possible; the detail measurements say 2× retains
   ~21% of high-frequency energy versus ~1.3% at 4×.</li>
-  <li><strong>Matte at final resolution.</strong> More pixels to decide with, narrower
-  relative edge.</li>
+  <li><strong>Spill suppression at final resolution.</strong> Clamp the screen channel to the
+  other two. It belongs here, not on the source — doing it on the small image collapses the
+  matte by a pixel.</li>
+  <li><strong>Matte, right after spill, at the same resolution.</strong> More pixels to decide
+  with, narrower relative edge, and the key still has enough green excess left to work with.</li>
   <li><strong>Composite.</strong> Nothing after this should touch the alpha channel.</li>
 </ol>
+
+<p>That reordering came out of the measurement, not out of theory: the version of this page
+that went up first said "suppress spill on the source, it's cheap and it must be early" and
+the numbers said that costs 1.3 points of edge error at 2× and 4.1 at 4×. Cheap and early
+turned out to mean doing it where the matte has the least information to work with.</p>
 
 <p>Note that this is a different order than the denoise case, where the sequence barely
 mattered (0.8% difference in comb residual). The difference is that denoise and deinterlace
@@ -131,14 +140,21 @@ becomes non-negotiable.</p>
 
 <p>Composite the result on a saturated background (magenta is the classic choice) and look at
 the boundary at 100%. Any band of background colour between subject and new background is
-your edge width. If it is more than 2px at the final resolution, something in the chain
-softened it and you can find which step by comparing before/after each one.</p>
+your edge width. At 2× the correct order measures 2px against the wrong order's 4px; at 4×
+it is 2px against 8px. If your result is worse than 2px at the final resolution, something in
+the chain softened it and you can find which step by comparing before/after each one.
+
+<p>Do not optimise for a zero-width band, though. Nearest-upscaling the alpha gets the band to
+0px and scores 16.3 — better than the "correct" 16.5 — but a zero-width transition at 1000px
+is an aliased staircase, and the metric cannot see the difference between a crisp edge and a
+jagged one. Edge width is a proxy for quality in exactly one direction: too wide is wrong,
+too narrow is also wrong, and only looking tells you which side you are on.</p>
 
 <p>Magenta is used because it appears nowhere in natural images — any magenta in the result is
 unambiguously a matte failure, not image content. That is why the old compositing tutorials
 insist on it.</p>
 
-<h2>Reproducing it</h2>
+<h2>The short version</h2>
 
 <pre><code># order A: matte at source resolution, then upscale the RGBA
 rgba_small = cutout(src)                  # 500x500
@@ -159,7 +175,7 @@ band = ((alpha &gt; 0.05) &amp; (alpha &lt; 0.95)).sum(axis=0).max()
 is a judgement call. So I built a scene where the answer is known exactly: a textured subject
 on a chroma-green screen, rendered at 1000×1000 with a one-pixel alpha ramp, then downsampled
 to 500×500 and to 250×250 to act as the "source" we have to work from. That gives one correct
-answer (the 1000px render) and three ways of getting there. Every number below is a distance
+answer (the 1000px render) and four ways of getting there. Every number below is a distance
 from that 1000px reference, not a comparison between two of the approximations.</p>
 
 <p>The matte is a plain green-excess key — <code>alpha = 1 − (G − max(R,B) − 20)/60</code>
@@ -221,12 +237,13 @@ with the matte, and splitting them across resolutions costs a pixel of the subje
 </tbody>
 </table>
 
-<p>The band grows to 8px and the total error to 44.6, a 1.63× penalty against the correct
-order. Note where the penalty lands: ΔG goes from 15.9 to 4.7 — a 3.4× difference — while
-ΔR and ΔB move by less than 10%. Green is the screen colour, so this is spill being smeared
-across the widened band, not a general loss of accuracy. On a blue screen the number that
-would blow up is ΔB instead. The failure mode is specific to the background colour, which is
-also why it is invisible in a test image that happens to have a neutral background.</p>
+<p>The band grows to 8px and the total error to 44.6, a 1.62× penalty against the correct
+order. The excess is 17.1 points, and where it lands is the interesting part: 11.1 of those
+points are ΔG alone (65% of the penalty), 4.9 are ΔB, and ΔR contributes only 1.1. Green is
+the screen colour, so most of this is spill being smeared across the widened band rather than
+a general loss of accuracy. On a blue screen the channel that would blow up is B instead. The
+failure mode is tied to the background colour, which is also why it stays invisible on a test
+image that happens to have a neutral background.</p>
 
 <h2>Reproducing it</h2>
 
