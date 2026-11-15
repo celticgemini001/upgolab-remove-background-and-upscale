@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Cutout and Upscale in One Workflow: Where the Edges Fail</title>
-<meta name="description" content="Background removal and upscaling interact: a matte made at low resolution has soft edges that upscaling turns into halos. Measured edge-width growth and why order matters here (unlike denoise).">
+<meta name="description" content="Background removal and upscaling interact: a matte made at low resolution has soft edges that upscaling turns into halos. Measured edge-width growth across both orders, plus why a higher-resolution matte cannot recover hair strands under two source pixels.">
+<meta property="og:description" content="Measured: upscale first then matte narrows the alpha band from 4px to 2px at 2x. But for hair strands under two source pixels the matte resolution is irrelevant — only the key threshold moves them, and it floods the background.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-remove-background-and-upscale/">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Cutout and Upscale in One Workflow: Where the Edges Fail">
@@ -142,7 +143,7 @@ becomes non-negotiable.</p>
 the boundary at 100%. Any band of background colour between subject and new background is
 your edge width. At 2× the correct order measures 2px against the wrong order's 4px; at 4×
 it is 2px against 8px. If your result is worse than 2px at the final resolution, something in
-the chain softened it and you can find which step by comparing before/after each one.
+the chain softened it and you can find which step by comparing before/after each one.</p>
 
 <p>Do not optimise for a zero-width band, though. Nearest-upscaling the alpha gets the band to
 0px and scores 16.3 — better than the "correct" 16.5 — but a zero-width transition at 1000px
@@ -220,6 +221,8 @@ earlier; it is removed by suppressing where the matte is more precise.</p>
 <p><strong>Revised rule:</strong> upscale first, matte second, suppress spill at the same
 resolution as the matte. The clamp is not a "do it early because it's cheap" step — it belongs
 with the matte, and splitting them across resolutions costs a pixel of the subject.</p>
+<p>That rule is measured on a solid boundary. The last section on this page tests it against
+hair, and finds the resolution half of the advice does nothing there.</p>
 </div>
 
 <h2>What 4× does to the same comparison</h2>
@@ -277,6 +280,123 @@ out_B = compose(clean, key(clean))
 averaged number — the per-channel split is what tells you whether you are looking at spill or
 at a genuine resolution loss. The full script that produced the tables above is about forty
 lines and runs in under two seconds.</p>
+
+<h2>Where the fringe goes, and why resolution cannot get it back</h2>
+
+<p>Everything above assumes a hard subject boundary — a 1px ramp between two solid
+regions. Hair, fur and motion-blurred limbs are not that. They are strands a couple of
+pixels wide at partially transparent alpha, and a key that is perfectly correct on the
+solid silhouette can drop them completely while still scoring a clean edge.</p>
+
+<p>So I rebuilt the scene with 36 strands hanging off the rim, four width groups of nine
+(2, 4, 6, 8px at the 1000px render), all at alpha 0.65, and measured how much of each
+group's alpha mass survives to the 1000px result. Mass is the sum of alpha over the
+strand footprint, as a fraction of the ground-truth sum — a strand that is kept but
+thinned reads the same as one that is dropped in patches, and both look wrong.</p>
+
+<table>
+<thead><tr><th>Key offset, source 250px → 1000px</th><th class="num">2px</th><th class="num">4px</th><th class="num">6px</th><th class="num">8px</th><th class="num">Band</th></tr></thead>
+<tbody>
+<tr><td>0 (no offset)</td><td class="num">0.033</td><td class="num">0.044</td><td class="num">0.085</td><td class="num">0.280</td><td class="num">5.68 px</td></tr>
+<tr><td>20 (the value used above)</td><td class="num">0.039</td><td class="num">0.054</td><td class="num">0.309</td><td class="num">0.598</td><td class="num">7.32 px</td></tr>
+<tr><td>40</td><td class="num">0.049</td><td class="num">0.232</td><td class="num">0.686</td><td class="num">0.975</td><td class="num">9.38 px</td></tr>
+<tr><td>60</td><td class="num">0.320</td><td class="num">0.695</td><td class="num">1.139</td><td class="num">1.264</td><td class="num">12.76 px</td></tr>
+<tr><td>80</td><td class="num">0.831</td><td class="num">1.207</td><td class="num">1.414</td><td class="num">1.428</td><td class="num">380.23 px</td></tr>
+</tbody>
+</table>
+
+<p>The band column is band area divided by boundary circumference, computed over the whole
+image including the strand perimeters, which is why it is wider than the solid-edge figures
+earlier on the page even at offset 20.</p>
+
+<p>Three things fall out of that table, and the first one contradicts the advice earlier on
+this page.</p>
+
+<p><strong>Resolution buys nothing for the fringe.</strong> The obvious fix, given the
+section above, is to compute the matte where there are more pixels. It does not work. At
+matte resolutions of 250, 500, 750 and 1000, the 2px group holds 0.039 / 0.044 / 0.041 /
+0.041 of its mass, the 6px group 0.309 / 0.274 / 0.278 / 0.278, the 8px group 0.598 / 0.605
+/ 0.603 / 0.604. Across a 4× increase in matte resolution every group moves by under four
+hundredths of its mass — two improve and two get worse — while the solid band tightens
+from 7.32px to 2.69px over the same range. Computing the matte at higher
+resolution fixes exactly the thing it can see — the solid boundary — and none of the thing
+it cannot. The loss happened in the downsample, before the key ever ran, and a later, bigger
+key cannot invent strands that are no longer in the pixels.</p>
+
+<p><strong>What does recover the fringe is the key threshold, and it is a bad trade.</strong>
+Raising the offset from 20 to 40 doubles the 4px recovery (0.054 → 0.232) and more than
+doubles the 6px (0.309 → 0.686), but pushes the solid band from 7.32px to 9.38px — worse
+than the matte-first order this page spends its first half telling you to avoid. The tail
+of the table is worse than a trade: at offset 80 the solid band reads 380px, which is not
+a wide edge but a flooded frame. The offset had passed the background's own excess and the
+whole screen went opaque.</p>
+
+<p>The cliff is arithmetic, not taste. A clean chroma green has
+<code>G − max(R,B) = 124</code>; the key's width is 60, so the background stays at alpha 0
+only while the offset is at most <code>124 − 60 = 64</code>. Every point of offset above
+that turns background into fringe, and the table's 12.76px at offset 60 is the last row
+before it. The 9.38px at offset 40 is roughly half the cliff used up in exchange for
+recovering strands four pixels wide.</p>
+
+<p><strong>And the budget shrinks with noise.</strong> That 64 is a clean-screen number.
+Run the same source with independent per-channel sensor noise and take the 0.1st percentile
+of <code>G − max(R,B)</code> over the background — the worst patch of screen in the frame,
+which is what will break first:</p>
+
+<table>
+<thead><tr><th>Noise σ (8-bit levels)</th><th class="num">0</th><th class="num">8</th><th class="num">16</th><th class="num">24</th></tr></thead>
+<tbody>
+<tr><td>0.1st pct of background excess</td><td class="num">118</td><td class="num">108</td><td class="num">93</td><td class="num">77</td></tr>
+<tr><td>Largest safe offset</td><td class="num">58</td><td class="num">48</td><td class="num">33</td><td class="num">17</td></tr>
+</tbody>
+</table>
+
+<p>At σ=24 the safe offset is 17 — below the 20 that produced every solid-edge table on
+this page. So on grainy footage the offset that was measured as correct is already 3 levels
+into the leak, and the strands it is failing to keep would have needed 40. There is no
+offset that does both. That is the honest conclusion: <strong>for a source whose strands are
+under two source pixels, no key setting recovers them, and the settings that get close
+widen the solid boundary past the point where the order question matters.</strong> The fix
+is upstream — shoot the subject larger, or key against a background that differs from the
+subject in a channel the fringe does not share — not a better threshold downstream.</p>
+
+<p>One caveat about the numbers, since it is the kind of thing that makes two honest
+measurements disagree. The band figures here are band <em>area</em> divided by boundary
+circumference — a width averaged around the whole silhouette. The earlier tables counted the
+transition pixels along a single horizontal row through the disc centre. On one and the same
+2× result the two estimators give 4px by row count and 2.37px by area, and for the correct
+order 2px by row count and 0.59px by area. Absolute values differ by more than 3× for the
+same picture, because a horizontal row through the widest part of a circle is the worst case
+and a circumference average is not. Both are honest; neither is rescaled to match the other,
+and only comparisons within one estimator mean anything.</p>
+
+<pre><code>import numpy as np
+from PIL import Image
+
+T = 1000
+a_gt = strand_alpha(T)                        # ground truth: solid disc + strands
+gt   = a_gt &gt; 0.5
+
+def key(rgb, off=20.0, width=60.0):
+    x = np.asarray(rgb, np.float32)           # float: on uint8 the subtraction wraps
+    ex = x[..., 1] - np.maximum(x[..., 0], x[..., 2])
+    return 1.0 - np.clip((ex - off) / width, 0.0, 1.0)
+
+src = np.asarray(Image.fromarray(scene.astype(np.uint8)).resize((250, 250), Image.LANCZOS))
+
+for off in (0, 20, 40, 60, 80):
+    rgba = np.dstack([src, (key(src, off) * 255).astype(np.uint8)]).astype(np.uint8)
+    a = np.asarray(Image.fromarray(rgba, "RGBA").resize((T, T), Image.LANCZOS), float)[..., 3] / 255
+    band = ((a &gt; 0.05) &amp; (a &lt; 0.95)).sum() / (2 * np.pi * radius)   # width, not row count
+    print(off, round(band, 2), [round(a[m].sum() / a_gt[m].sum(), 3) for m in strand_groups])
+</code></pre>
+
+<p>The two bugs I hit building this are worth a line each, because both produced plausible
+output rather than an error. Subtracting channel values in <code>uint8</code> wraps modulo
+256, so <code>G − max(R,B)</code> on pure skin gives 212 instead of −44 and the key inverts
+silently — every measurement still returns a number, all of them meaningless. And adding one
+noise field across R, G and B leaves <code>G − max(R,B)</code> exactly invariant, so the
+noise sweep came back perfectly flat at every σ until the noise was drawn per channel.</p>
 
 <h2>Try both orders on one file</h2>
 
