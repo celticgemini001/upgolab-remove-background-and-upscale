@@ -370,6 +370,10 @@ same picture, because a horizontal row through the widest part of a circle is th
 and a circumference average is not. Both are honest; neither is rescaled to match the other,
 and only comparisons within one estimator mean anything.</p>
 
+<p>The inner loop is the whole measurement. <code>strand_alpha</code>, <code>scene</code>,
+<code>radius</code> and <code>strand_groups</code> are the scene builder described above —
+36 strands in four width groups on a disc with a 1px ramp, alpha 0.65 per strand.</p>
+
 <pre><code>import numpy as np
 from PIL import Image
 
