@@ -37,6 +37,15 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 pre{background:#f7f8fa;border:1px solid var(--line);border-radius:8px;padding:1rem;overflow-x:auto;font-size:.86rem}
 footer{margin-top:4rem;padding-top:1.4rem;border-top:1px solid var(--line);font-size:.9rem;color:var(--mut)}
 </style>
+<style>
+.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
+.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
+ color:#5b6270;margin:0 0 .6rem}
+.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
+.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
+.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
+.sisternav a:hover{border-bottom-color:#0a58ca}
+</style>
 </head>
 <body>
 <main>
@@ -59,7 +68,7 @@ most sensitive to.</p>
 1000×1000:</p>
 
 <ul>
-  <li><strong>Cut out, then upscale.</strong> The matte is computed at 500×500, so its edge
+  <li><strong>Cut out, then upscale.</strong> The <a href="https://celticgemini001.github.io/upgolab-upscale-product-photos/">matte</a> is computed at 500×500, so its edge
   is one source pixel wide — then the upscale widens it while softening it. Measured below:
   a 1px source ramp becomes a 4px transition at 2× and 8px at 4×.</li>
   <li><strong>Upscale, then cut out.</strong> The upscale softens the subject boundary itself
@@ -69,7 +78,7 @@ most sensitive to.</p>
 
 <p>In both cases something is soft — measured, 4px versus 2px at 2×, and 8px versus 2px at 4×
 (see the tables below). The difference is which thing. Upscaling second means the softness
-lands on the alpha channel, where it composites as a fringe. Upscaling first means the
+lands on the <a href="https://celticgemini001.github.io/upgolab-output-format-after-upscale/">alpha</a> channel, where it composites as a fringe. Upscaling first means the
 softness lands on the RGB edge, where it is partially masked by the subject's own colour.</p>
 
 <div class="callout">
@@ -284,7 +293,7 @@ lines and runs in under two seconds.</p>
 <h2>Where the fringe goes, and why resolution cannot get it back</h2>
 
 <p>Everything above assumes a hard subject boundary — a 1px ramp between two solid
-regions. Hair, fur and motion-blurred limbs are not that. They are strands a couple of
+regions. Hair, fur and <a href="https://celticgemini001.github.io/upgolab-motion-blur-before-upscale/">motion-blurred</a> limbs are not that. They are strands a couple of
 pixels wide at partially transparent alpha, and a key that is perfectly correct on the
 solid silhouette can drop them completely while still scoring a clean edge.</p>
 
@@ -418,16 +427,6 @@ the whole content of the advice.</p>
 <footer>
 Published by <a href="https://upgolab.com">UpgoLAB</a> — AI photo and short-video upscaling
 in the browser. Edge-band width measured on the alpha channel after each order.
-
-<style>
-.sisternav{margin:2rem 0 0;padding-top:1.2rem;border-top:1px solid #e2e5ea}
-.sisternav p{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;
- color:#5b6270;margin:0 0 .6rem}
-.sisternav ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.4rem .9rem}
-.sisternav li{margin:0;font-size:.88rem;line-height:1.4}
-.sisternav a{text-decoration:none;border-bottom:1px solid #d5dae2}
-.sisternav a:hover{border-bottom-color:#0a58ca}
-</style>
 
 <nav class="sisternav" aria-label="More measured upscaling guides">
 <p>More measured guides</p>
