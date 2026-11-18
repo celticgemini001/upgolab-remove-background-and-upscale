@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Cutout and Upscale in One Workflow: Where the Edges Fail</title>
-<meta name="description" content="Background removal and upscaling interact: a matte made at low resolution has soft edges that upscaling turns into halos. Measured edge-width growth across both orders, plus why a higher-resolution matte cannot recover hair strands under two source pixels.">
+<meta name="description" content="Background removal and upscaling interact: a matte made at low resolution has soft edges that upscaling turns into halos. Measured edge-width growth across both orders, plus why a higher-resolution matte cannot recover hair strands under two source pixels. Includes the video case, where alpha is a separate full-resolution stream beside 4:2:0 colour and the damage moves from the matte to the chroma.">
 <meta property="og:description" content="Measured: upscale first then matte narrows the alpha band from 4px to 2px at 2x. But for hair strands under two source pixels the matte resolution is irrelevant — only the key threshold moves them, and it floods the background.">
 <link rel="canonical" href="https://celticgemini001.github.io/upgolab-remove-background-and-upscale/">
 <meta property="og:type" content="article">
@@ -422,6 +422,218 @@ what you see.</p>
 
 <p>Upscale first, matte second, suppress spill before either. Three steps, and the order is
 the whole content of the advice.</p>
+
+<h2>What changes when the cutout is a video, not a still</h2>
+
+<p>Everything above assumes the matte and the frame travel together in one file. In a still
+that is true: a PNG or a PSD carries RGBA, and the alpha channel is the same width as the
+colour. In video it is not true, and the reason is a container decision made long before
+anyone thought about alpha.</p>
+
+<p>VP9 and H.264 store colour as luma plus two chroma planes, and the chroma planes are
+usually quarter resolution — 4:2:0. Alpha is not one of those planes. It is bolted on
+afterwards as a <em>separate monochrome stream</em>, at full resolution. So an alpha video is
+a full-resolution matte sitting next to a quarter-resolution colour field. The two are not
+degraded equally, and the one degraded more is the one your fringe is made of.</p>
+
+<p>This is measurable, and it inverts the advice above — for a different reason than you would
+guess.</p>
+
+<p><strong>Splitting the damage into three planes.</strong> A scene rendered analytically at two
+resolutions: 480×270, the cutout you have, and 1920×1080, the same geometry rendered natively
+and used only as ground truth. The subject boundary is a curve; inside it the hue cycles fast
+along <em>y</em>, which is deliberately hostile to chroma subsampling; outside is a near-black
+field. No noise, no grain — one variable. Encode the 480×270 frame as VP9 with alpha at CRF 10,
+decode it, and compare each plane against the source. No upscaling yet; this is only what the
+container costs:</p>
+
+<table>
+<thead><tr><th>Plane, VP9 <code>yuva420p</code> CRF 10</th><th class="num">Mean error</th><th class="num">Max error</th><th>Stored at</th></tr></thead>
+<tbody>
+<tr><td>Alpha</td><td class="num">0.0029</td><td class="num">3.22</td><td>full resolution, separate stream</td></tr>
+<tr><td>Luma</td><td class="num">1.212</td><td class="num">—</td><td>full resolution</td></tr>
+<tr><td>Chroma</td><td class="num">10.299</td><td class="num">—</td><td>half resolution, both axes</td></tr>
+</tbody>
+</table>
+
+<p>Errors are mean absolute difference in 8-bit levels. The alpha error is 0.0029 levels —
+three thousandths of one level out of 255. The chroma error is 10.3 levels. That is a ratio of
+<strong>3,551:1</strong>. The channel the still-image version of this article spends ten
+sections worrying about is, in video, the one channel the codec barely touches.</p>
+
+<p><strong>The chroma error is not a bitrate problem.</strong> The intuitive read is that VP9 is
+lossy and a higher quality setting would fix it. It does not, and a CRF sweep shows why. Six
+encodes, same source:</p>
+
+<table>
+<thead><tr><th>VP9 <code>yuva420p</code> CRF</th><th class="num">Size (KB)</th><th class="num">bpp</th><th class="num">Alpha err</th><th class="num">Luma err</th><th class="num">Chroma err</th></tr></thead>
+<tbody>
+<tr><td>4</td><td class="num">14.37</td><td class="num">0.9085</td><td class="num">0.0015</td><td class="num">1.113</td><td class="num">10.284</td></tr>
+<tr><td>10</td><td class="num">11.00</td><td class="num">0.6951</td><td class="num">0.0027</td><td class="num">1.118</td><td class="num">10.286</td></tr>
+<tr><td>20</td><td class="num">7.82</td><td class="num">0.4945</td><td class="num">0.0048</td><td class="num">1.131</td><td class="num">10.290</td></tr>
+<tr><td>32</td><td class="num">5.81</td><td class="num">0.3673</td><td class="num">0.0114</td><td class="num">1.152</td><td class="num">10.299</td></tr>
+<tr><td>45</td><td class="num">4.00</td><td class="num">0.2526</td><td class="num">0.0285</td><td class="num">1.349</td><td class="num">10.316</td></tr>
+<tr><td>55</td><td class="num">2.89</td><td class="num">0.1828</td><td class="num">0.0635</td><td class="num">1.860</td><td class="num">10.418</td></tr>
+</tbody>
+</table>
+
+<p>From CRF 4 to CRF 55 the file shrinks 5× (14.37 KB to 2.89 KB). Alpha error grows 42×
+(0.0015 to 0.0635) and luma error grows 1.7×, both behaving like lossy compression should.
+Chroma error moves from 10.284 to 10.418 — <strong>1.3%</strong>. It is pinned. You cannot buy
+it back with bits because it is not a quantisation loss; it is information discarded before the
+encoder ran.</p>
+
+<p>The control confirms it. Same frame, same CRF 32, but encoded as <code>yuv444p</code> — no
+alpha, full-resolution chroma:</p>
+
+<table>
+<thead><tr><th>Pixel format, CRF 32</th><th class="num">Size (KB)</th><th class="num">Chroma err</th><th class="num">Luma err</th></tr></thead>
+<tbody>
+<tr><td><code>yuv420p</code></td><td class="num">4.57</td><td class="num">10.299</td><td class="num">1.152</td></tr>
+<tr><td><code>yuv444p</code></td><td class="num">5.79</td><td class="num">0.242</td><td class="num">0.512</td></tr>
+</tbody>
+</table>
+
+<p>42× better chroma for 27% more bytes. The subsampling was the whole cost, and it is the one
+thing CRF cannot reach. Worth knowing before you spend an hour tuning quality on a green-screen
+composite whose green screen is being averaged down to quarter resolution.</p>
+
+<p><strong>The decoder trap that makes all of this invisible.</strong> Before any of the above
+can be measured there is a harder problem: two of ffmpeg's own VP9 decoders disagree about
+whether the file has alpha at all.</p>
+
+<table>
+<thead><tr><th>Same file, same ffmpeg build</th><th class="num">Alpha levels</th><th class="num">Alpha err</th><th class="num">Composite PSNR (white)</th></tr></thead>
+<tbody>
+<tr><td>default (native VP9 decoder)</td><td class="num">1</td><td class="num">133.19</td><td class="num">3.63 dB</td></tr>
+<tr><td><code>-c:v libvpx-vp9</code></td><td class="num">175</td><td class="num">0.0029</td><td class="num">20.93 dB</td></tr>
+</tbody>
+</table>
+
+<p>The native decoder returns a single alpha value — 255, fully opaque, everywhere. Not an
+error, not a warning, exit code 0. Composite that over white and you get 3.63 dB against the
+20.93 dB the libvpx path reaches from the same bytes. If you have ever exported a WebM with
+alpha, opened it in a tool, seen an opaque rectangle, and concluded the encode failed — the
+encode was fine. The decoder dropped the plane. <code>ffprobe</code> is no help either: on a
+file that demonstrably carries 175 alpha levels it reports</p>
+
+<pre><code>$ ffprobe -v error -show_entries stream=pix_fmt -of csv=p=0 clip.webm
+yuv420p</code></pre>
+
+<p>Not <code>yuva420p</code>. The <code>a</code> is absent because ffprobe describes the primary
+stream and alpha lives in the side stream. Any pipeline that gates on <code>pix_fmt</code>
+containing an <code>a</code> — which is most of them — will route an alpha clip down the opaque
+path and never report a thing.</p>
+
+<p><strong>Encoding before the upscale versus after it.</strong> Both pipelines start from the
+identical 480×270 cutout and are scored against the natively rendered 1920×1080 ground truth.
+Pipeline A encodes at source size, decodes, then runs Lanczos 4×. Pipeline B runs Lanczos 4×
+first, then encodes the 1920×1080 frame. Neither is given the ground truth for free.</p>
+
+<table>
+<thead><tr><th>4× Lanczos, edge band composited over white</th><th class="num">KB</th><th class="num">Edge err</th><th class="num">Max</th><th class="num">&gt;8 levels</th><th class="num">PSNR</th><th class="num">Alpha err</th><th class="num">Chroma err</th></tr></thead>
+<tbody>
+<tr><td>upscale only, no codec</td><td class="num">—</td><td class="num">17.38</td><td class="num">79.5</td><td class="num">77.6%</td><td class="num">45.91</td><td class="num">18.56</td><td class="num">5.13</td></tr>
+<tr><td>ProRes 4444 @480, then 4×</td><td class="num">82.9</td><td class="num">17.47</td><td class="num">79.5</td><td class="num">77.3%</td><td class="num">45.89</td><td class="num">18.63</td><td class="num">5.13</td></tr>
+<tr><td>VP9 CRF 10 @480, then 4×</td><td class="num">11.0</td><td class="num">29.19</td><td class="num">111.4</td><td class="num">93.6%</td><td class="num">22.20</td><td class="num">18.68</td><td class="num">17.17</td></tr>
+<tr><td>VP9 CRF 28 @480, then 4×</td><td class="num">6.5</td><td class="num">29.25</td><td class="num">110.8</td><td class="num">93.4%</td><td class="num">22.20</td><td class="num">18.79</td><td class="num">17.17</td></tr>
+<tr><td>4×, then ProRes 4444</td><td class="num">905.5</td><td class="num">17.25</td><td class="num">79.8</td><td class="num">76.4%</td><td class="num">45.95</td><td class="num">18.39</td><td class="num">5.13</td></tr>
+<tr><td>4×, then VP9 CRF 10</td><td class="num">70.3</td><td class="num">19.29</td><td class="num">92.3</td><td class="num">83.3%</td><td class="num">32.54</td><td class="num">18.36</td><td class="num">8.43</td></tr>
+<tr><td>4×, then VP9 CRF 28</td><td class="num">27.7</td><td class="num">19.37</td><td class="num">90.3</td><td class="num">82.7%</td><td class="num">32.53</td><td class="num">18.33</td><td class="num">8.47</td></tr>
+</tbody>
+</table>
+
+<p>Read the alpha column first, because it answers the question the sections above ask. Alpha
+error is 18.56 with no codec at all, and 18.33–18.79 in <em>every</em> row. The container
+contributes essentially nothing to the alpha channel. All 18+ levels of it come from the
+Lanczos upscaling — exactly the finding measured on stills above, surviving the move to video
+unchanged.</p>
+
+<p>Then read the chroma column, where the containers differ. The upscale alone costs 5.13
+levels. Encoding at 480 with 4:2:0 first costs 17.17 — over three times worse, and identical at
+CRF 10 and CRF 28, because the subsampling floor is not a bitrate. Encoding <em>after</em> the
+upscale costs 8.43, still worse than the floor but half the damage of encoding before. ProRes
+4444 pays nothing on either side: 5.13 either way, because it really does keep 4:4:4 chroma
+next to full-resolution alpha.</p>
+
+<p>So the ordering rule for video points the same direction as for stills, for a different
+reason and with a different culprit. Upscale first, then encode. But in video you are not
+protecting the matte from being widened — the matte survives either way, stored in a plane the
+subsampler never looks at. You are protecting the colour <em>under</em> the matte from being
+averaged with the colour of the background it is about to be composited against.</p>
+
+<p>One result did not go the expected direction, and it is small enough to name rather than
+smooth over: 4× then ProRes 4444 scores 17.25 against the no-codec 17.38, fractionally
+<em>better</em> than encoding nothing. The gap is 0.13 levels on a 0–255 scale — the 10-bit
+encode rounding the interpolator's overshoot back into range, far inside any threshold that
+matters. Do not read it as ProRes improving the image.</p>
+
+<p><strong>Bit depth does not buy alpha precision here.</strong> The obvious follow-up: both
+VP9 and ProRes alpha are 8-bit, so surely 10-bit alpha helps? Measured on the same 184-level
+matte, ProRes 4444 at <code>yuva444p10le</code> returns alpha with a maximum error of exactly
+<strong>1.0 level</strong> against the 8-bit source, and the same 184 distinct levels. The
+container offers more precision; the 8-bit source has none to give. Ten-bit alpha only pays if
+the matte is authored in ten bits — which means the segmentation ran at higher precision, not
+that the encode did.</p>
+
+<p><strong>Reproducing it.</strong></p>
+
+<pre><code>import numpy as np, subprocess
+W, H, S = 480, 270, 4          # source size, and the ground-truth scale factor
+
+def render(scale):
+    """Same geometry at any resolution. The 4x render is the ground truth."""
+    w, h = W*scale, H*scale
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    X, Y = x/scale + 0.5/scale, y/scale + 0.5/scale
+    edge = 250.0 + 26.0*np.sin(Y/23.0) + 0.30*(Y-135.0)
+    cov  = np.clip((X - edge) + 0.5, 0, 1)      # 1 source-px alpha ramp
+    ph   = 2*np.pi*(Y/9.0)                       # fast hue cycle = chroma-hostile
+    sub  = np.stack([0.5+0.5*np.cos(ph),
+                     0.5+0.5*np.cos(ph-2.094),
+                     0.5+0.5*np.cos(ph+2.094)], -1)
+    bg   = np.clip(0.10+0.03*np.sin(X/3)*np.sin(Y/3), 0, 1)
+    bg   = np.stack([bg]*3, -1)
+    rgb  = np.clip(sub,0,1)*cov[...,None] + bg*(1-cov[...,None])
+    return np.concatenate([np.clip(rgb,0,1), cov[...,None]], -1).astype(np.float32)
+
+def write_png(path, rgba):
+    h, w = rgba.shape[:2]
+    u8 = (np.clip(rgba,0,1)*255 + 0.5).astype(np.uint8)
+    subprocess.run(['ffmpeg','-y','-v','error','-f','rawvideo','-pix_fmt','rgba',
+                    '-s',f'{w}x{h}','-i','-','-frames:v','1','-c:v','png',path],
+                   input=u8.tobytes(), check=True)
+
+def read_rgba(path, w, h, decoder=None):
+    cmd = ['ffmpeg','-v','error'] + (['-c:v',decoder] if decoder else [])
+    cmd += ['-i',path,'-frames:v','1','-f','rawvideo','-pix_fmt','rgba','-']
+    raw = subprocess.run(cmd, capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.uint8).reshape(h,w,4).astype(np.float32)/255
+
+write_png('src.png', render(1))
+
+# --- the trap: without -c:v libvpx-vp9 this returns opaque ---
+opaque = read_rgba('clip.webm', W, H)                  # alpha levels: 1
+real   = read_rgba('clip.webm', W, H, 'libvpx-vp9')    # alpha levels: 175
+
+src, dec = render(1), real
+print('alpha err ', np.abs(dec[...,3] - src[...,3]).mean()*255)     # 0.003
+print('luma  err ', np.abs(dec[...,:3].mean(-1) - src[...,:3].mean(-1)).mean()*255)
+print('chroma err', np.abs(dec[...,:3] - src[...,:3]).mean()*255)   # ~10.3</code></pre>
+
+<p>Encode with <code>-c:v libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf 10 -auto-alt-ref 0</code>.
+The <code>-auto-alt-ref 0</code> is not optional for measurement: alt-ref frames are
+bidirectional, so per-frame error depends on frame position and one number becomes a
+distribution you did not ask for.</p>
+
+<p><strong>What this leaves out.</strong> One source frame, one boundary curvature, one hue
+rate. A slower hue cycle would pull the chroma error toward the 0.242 the 4:4:4 control
+reached; a faster one would raise it. The 3,551:1 ratio between chroma and alpha damage is not
+a constant of nature — it is what this scene shows, and the mechanism is the 4:2:0 geometry
+rather than the number. The two findings that should hold regardless are structural: alpha
+lives in a separate full-resolution stream, so it escapes subsampling; and two of ffmpeg's VP9
+decoders disagree about whether alpha exists, silently, with the same exit code and the same
+ffprobe output.</p>
 
 </article>
 <footer>
